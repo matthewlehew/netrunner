@@ -89,7 +89,9 @@
     [cond-button [tr-span [:lobby_start "Start"]]
      (or (every? :deck @players)
          (is-preconstructed? current-game)
-         (= "chimera" (:format current-game)))
+         (= "chimera" (:format current-game))
+         ;; Agent games only need the human player's deck
+         (:agent-opponent @current-game))
      #(ws/ws-send! [:game/start {:gameid @gameid}])]))
 
 (defn leave-button [gameid]
@@ -113,6 +115,13 @@
     [:div.infobox.blue-shade
      (let [link [:a {:href "https://www.playchimera.net" :target "_blank"} "playchimera.net"]]
        [tr-element-with-embedded-content :p [:lobby_chimera-info [:span "Chimera is a format in which each player plays with randomly generated decklists. Visit " link " for more info on the rules and decisions behind the format."]] {:link link} nil])]))
+
+(defn agent-info-box [current-game]
+  (when (:agent-opponent @current-game)
+    [:div.infobox.blue-shade
+     [:p "🤖 " [:strong "AI Agent Game"]]
+     [:p (str "The agent will play as " (:agent-side @current-game) ".")]
+     [:p "The agent will receive notifications via webhook and can interact through the Game API."]]))
 
 (defn singleton-info-box [current-game]
   (when (:singleton @current-game)
@@ -226,8 +235,10 @@
       [precon-info-box current-game]
       [singleton-info-box current-game]
       [chimera-info-box current-game]
+      [agent-info-box current-game]
       (when-not (or (every? :deck @players)
-                    (not (is-constructed? current-game)))
+                    (not (is-constructed? current-game))
+                    (:agent-opponent @current-game))
         [tr-element :div.flash-message [:lobby_waiting "Waiting players deck selection"]])
       [player-list user current-game players]
       [options-list current-game]

@@ -15,8 +15,12 @@
    [jinteki.utils :refer [side-from-str]]
    [jinteki.chimera :as chimera]
    [medley.core :refer [find-first]]
+   [monger.collection :as mc]
+   [web.agent :as agent]
+   [web.agent-notifications :as agent-notify]
    [web.app-state :as app-state]
    [web.lobby :as lobby]
+   [web.mongodb :as mongodb]
    [web.stats :as stats]
    [web.ws :as ws]
    [taoensso.timbre :as timbre]))
@@ -56,7 +60,10 @@
           runner-spectators? (seq (:runner-spectators lobby))
           diffs (diffs/public-diffs old-state state spectators? corp-spectators? runner-spectators?)]
       (swap! state update :history conj (:hist-diff diffs))
-      (send-state-diffs lobby diffs))))
+      (send-state-diffs lobby diffs)
+      ;; Check if agent needs to be notified after this action
+      (when (agent/agent-game? lobby)
+        (agent-notify/notify-checkpoint! lobby state)))))
 
 (defn handle-message-and-send-diffs!
   "If the given message is a command, passes through to `update-and-send-diffs!`.
@@ -151,6 +158,31 @@
       (set-precon-deck "Corp" (:corp precon-match))
       (set-precon-deck "Runner" (:runner precon-match))))
 
+(defn setup-agent-player
+  "Sets up the agent player for an agent game.
+   Loads the agent's deck from the database using the human player's deck list."
+  [db game]
+  (if-let [agent-deck-id (:agent-deck-id game)]
+    (let [agent-side (:agent-side game)
+          human-player (first (:players game))
+          human-username (get-in human-player [:user :username])
+          ;; Load the deck from the human player's decks
+          raw-deck (mc/find-one-as-map db "decks" 
+                                       {:_id (mongodb/->object-id agent-deck-id)
+                                        :username human-username})
+          agent-deck (when raw-deck (lobby/process-deck raw-deck))
+          agent-player (agent/create-agent-player
+                         {:agent-side agent-side
+                          :agent-deck agent-deck
+                          :agent-webhook-url (:agent-webhook-url game)
+                          :agent-api-key (:agent-api-key game)})]
+      (if agent-deck
+        (assoc game :players (conj (:players game) agent-player))
+        (do
+          (timbre/warn "Failed to load agent deck:" agent-deck-id)
+          game)))
+    game))
+
 (defn handle-precon-decks
   [game]
   (if-let [precon (:precon game)]
@@ -176,20 +208,45 @@
       (assoc lobbies gameid g))
     lobbies))
 
+(defn handle-start-agent-game 
+  "Handles starting a game with an agent opponent.
+   Sets up the agent player with their deck before initializing the game."
+  [db lobbies gameid players now]
+  (if-let [lobby (get lobbies gameid)]
+    (as-> lobby g
+      (setup-agent-player db g)  ;; Add agent player with deck
+      (handle-precon-decks g)
+      (merge g {:started true
+                :original-players (:players g)  ;; Include agent in original players
+                :ending-players (:players g)
+                :start-date now
+                :last-update now
+                :state (init-game g)})
+      (check-for-starter-decks g)
+      (update g :players #(mapv strip-deck %))
+      (assoc lobbies gameid g))
+    lobbies))
+
 (defn try-start-game
   [db uid gameid]
-  (let [{:keys [players started] :as lobby} (app-state/get-lobby gameid)]
-      (when (and lobby (lobby/first-player? uid lobby) (not started))
-        (let [now (inst/now)
-              new-app-state
-              (swap! app-state/app-state
-                     update :lobbies handle-start-game gameid players now)
-              lobby? (get-in new-app-state [:lobbies gameid])]
-          (when lobby?
-            (stats/game-started db lobby?)
-            (lobby/send-lobby-state lobby?)
-            (lobby/broadcast-lobby-list)
-            (send-state-to-participants :game/start lobby? (diffs/public-states (:state lobby?))))))))
+  (let [{:keys [players started agent-opponent] :as lobby} (app-state/get-lobby gameid)]
+    (when (and lobby (lobby/first-player? uid lobby) (not started))
+      (let [now (inst/now)
+            new-app-state
+            (swap! app-state/app-state
+                   update :lobbies 
+                   (if agent-opponent
+                     #(handle-start-agent-game db % gameid players now)
+                     #(handle-start-game % gameid players now)))
+            lobby? (get-in new-app-state [:lobbies gameid])]
+        (when lobby?
+          (stats/game-started db lobby?)
+          (lobby/send-lobby-state lobby?)
+          (lobby/broadcast-lobby-list)
+          (send-state-to-participants :game/start lobby? (diffs/public-states (:state lobby?)))
+          ;; Notify agent that game has started
+          (when agent-opponent
+            (agent-notify/notify-game-started! lobby? (:state lobby?))))))))
 
 (defmethod ws/-msg-handler :game/start
   game--start

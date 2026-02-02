@@ -99,7 +99,17 @@
       ["/hand" {:get #'game-api/hand-handler}]
       ["/discard" {:get #'game-api/discard-handler}]
       ["/deck" {:get #'game-api/deck-handler}]
-      ["/log" {:get #'game-api/log-handler}]]
+      ["/log" {:get #'game-api/log-handler}]
+      ;; Agent API endpoints
+      ["/state" {:get #'game-api/state-handler}]
+      ["/prompt" {:get #'game-api/prompt-handler}]
+      ["/actions" {:get #'game-api/available-actions-handler}]
+      ["/board" {:get #'game-api/board-handler}]
+      ["/scored" {:get #'game-api/scored-handler}]
+      ["/run" {:get #'game-api/run-handler}]
+      ["/action" {:post #'game-api/action-handler}]
+      ["/choice" {:post #'game-api/choice-handler}]
+      ["/select" {:post #'game-api/select-handler}]]
      ["/profile" {:middleware [::auth ::forgery]}
       ["" {:put #'auth/update-profile-handler}]
       ["/email" {:get #'auth/email-handler

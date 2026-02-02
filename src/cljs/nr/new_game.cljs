@@ -23,7 +23,13 @@
    :gateway-type
    :open-decklists
    :timer
-   :title])
+   :title
+   ;; Agent opponent options
+   :agent-opponent
+   :agent-side
+   :agent-deck-id
+   :agent-webhook-url
+   :agent-api-key])
 
 (defn create-game [state lobby-state options]
   (authenticated
@@ -34,6 +40,12 @@
         (and (:protected @options)
              (empty? (:password @options)))
         (swap! state assoc :flash-message (tr [:lobby_password-error "Please fill a password."]))
+        (and (:agent-opponent @options)
+             (empty? (:agent-deck-id @options)))
+        (swap! state assoc :flash-message "Please select a deck for the AI agent.")
+        (and (:agent-opponent @options)
+             (empty? (:agent-webhook-url @options)))
+        (swap! state assoc :flash-message "Please enter the agent webhook URL.")
         :else
         (let [new-game (select-keys (merge @state @options) new-game-keys)]
           (swap! lobby-state assoc :editing false)
@@ -227,7 +239,59 @@
     {:style {:display (if (:api-access @options) "block" "none")}}
     [tr-element :p [:lobby_api-access-details "This allows access to information about your game to 3rd party extensions. Requires an API Key to be created in Settings."]]]])
 
-(defn options-section [options user]
+(defn agent-opponent-section [options decks]
+  "Section for configuring an LLM agent opponent"
+  [:<>
+   [:p
+    [:label
+     [:input {:type "checkbox"
+              :checked (:agent-opponent @options)
+              :on-change #(let [checked (.. % -target -checked)]
+                            (swap! options assoc :agent-opponent checked)
+                            ;; Enable API access automatically for agent games
+                            (when checked
+                              (swap! options assoc :api-access true)))}]
+     "Play against AI Agent"]]
+   [:div
+    {:style {:display (if (:agent-opponent @options) "block" "none")}}
+    [:div.infobox.blue-shade
+     {:style {:margin-bottom "10px"}}
+     [:p "Configure your LLM-based AI opponent. The agent will receive game state via API and can execute actions through the game API."]]
+    [:p
+     [:label "Agent plays as: "]
+     [:select {:value (or (:agent-side @options) "Corp")
+               :on-change #(swap! options assoc :agent-side (.. % -target -value))}
+      [:option {:value "Corp"} "Corp"]
+      [:option {:value "Runner"} "Runner"]]]
+    [:p
+     [:label "Agent's deck: "]
+     [:select {:value (or (:agent-deck-id @options) "")
+               :on-change #(swap! options assoc :agent-deck-id (.. % -target -value))}
+      [:option {:value ""} "-- Select a deck --"]
+      (let [agent-side (or (:agent-side @options) "Corp")
+            side-decks (filter #(= agent-side (get-in % [:identity :side])) @decks)]
+        (for [deck side-decks]
+          ^{:key (:_id deck)}
+          [:option {:value (:_id deck)} 
+           (str (:name deck) " (" (get-in deck [:identity :title]) ")")]))]]
+    [:p
+     [:label "Webhook URL: "]
+     [:input.game-title {:type "text"
+                         :placeholder "https://your-agent-endpoint.com/webhook"
+                         :value (or (:agent-webhook-url @options) "")
+                         :on-change #(swap! options assoc :agent-webhook-url (.. % -target -value))}]]
+    [:p
+     [:label "Agent API Key: "]
+     [:input.game-title {:type "text"
+                         :placeholder "API key for authenticating with your agent"
+                         :value (or (:agent-api-key @options) "")
+                         :on-change #(swap! options assoc :agent-api-key (.. % -target -value))}]]
+    [:div.infobox.blue-shade
+     {:style {:margin-top "10px"}}
+     [:p "Your agent will receive webhook notifications at the configured URL when action is required."]
+     [:p "The agent can use the Game API (with your JNet API key) to read game state and execute actions."]]]])
+
+(defn options-section [options user decks]
   [:section
    [tr-element :h3 [:lobby_options "Options"]]
    [allow-spectators options]
@@ -236,10 +300,12 @@
    [password-input options]
    [add-timer options]
    [save-replay options]
-   [api-access options user]])
+   [api-access options user]
+   [agent-opponent-section options decks]])
 
 (defn create-new-game [lobby-state user]
-  (r/with-let [state (r/atom {:flash-message ""
+  (r/with-let [decks (r/cursor app-state [:decks])
+               state (r/atom {:flash-message ""
                               :format (or (get-in @app-state [:options :default-format]) "standard")
                               :room (:room @lobby-state)
                               :side "Any Side"
@@ -255,7 +321,12 @@
                                 :spectatorhands false
                                 :open-decklists false
                                 :timed false
-                                :timer nil})
+                                :timer nil
+                                :agent-opponent false
+                                :agent-side "Corp"
+                                :agent-deck-id nil
+                                :agent-webhook-url ""
+                                :agent-api-key ""})
                title (r/cursor state [:title])
                side (r/cursor state [:side])
                precon (r/cursor state [:precon])
@@ -276,4 +347,4 @@
         [title-section title]
         [side-section side]
         [format-section fmt options gateway-type precon]
-        [options-section options user]]])))
+        [options-section options user decks]]])))

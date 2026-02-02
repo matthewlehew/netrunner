@@ -16,6 +16,7 @@
    [medley.core :refer [find-first]]
    [monger.collection :as mc]
    [time-literals.read-write :as read-write]
+   [web.agent :as agent]
    [web.app-state :as app-state]
    [web.mongodb :as mongodb]
    [web.stats :as stats]
@@ -106,12 +107,17 @@
     user :user
     {:keys [gameid now
             allow-spectator api-access format mute-spectators password room save-replay
-            precon gateway-type side singleton spectatorhands timer title open-decklists]
+            precon gateway-type side singleton spectatorhands timer title open-decklists
+            agent-opponent agent-side agent-deck-id agent-webhook-url agent-api-key]
      :or {gameid (random-uuid)
           now (inst/now)}} :options}]
-  (let [player {:user user
+  (let [;; Determine human player side based on agent settings
+        human-side (if agent-opponent
+                     (if (= agent-side "Corp") "Runner" "Corp")
+                     side)
+        player {:user user
                 :uid uid
-                :side side}]
+                :side human-side}]
     {:gameid gameid
      :date now
      :last-update now
@@ -125,7 +131,7 @@
      :precon (validate-precon format precon gateway-type)
      :open-decklists (or open-decklists (when (validate-precon format precon gateway-type) true))
      :allow-spectator allow-spectator
-     :api-access api-access
+     :api-access (or api-access agent-opponent) ;; Enable API access for agent games
      :format format
      :mute-spectators mute-spectators
      :password (when (not-empty password) (bcrypt/encrypt password))
@@ -134,7 +140,13 @@
      :spectatorhands spectatorhands
      :singleton (when (some #{format} `("standard" "startup" "casual" "eternal")) singleton)
      :timer timer
-     :title title}))
+     :title title
+     ;; Agent opponent settings
+     :agent-opponent agent-opponent
+     :agent-side agent-side
+     :agent-deck-id agent-deck-id
+     :agent-webhook-url agent-webhook-url
+     :agent-api-key agent-api-key}))
 
 (defn get-players-and-spectators [lobby]
   (concat (:players lobby) (:spectators lobby)))
@@ -217,6 +229,9 @@
    :timer
    :title
    :old
+   ;; Agent opponent settings
+   :agent-opponent
+   :agent-side
    ;; for tournament system
    :time-extension
    :excluded?
